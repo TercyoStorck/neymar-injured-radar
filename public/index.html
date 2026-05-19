@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Neymar Injury Radar</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell" aria-live="polite">
+      <section class="status-panel">
+        <header class="topbar">
+          <p class="eyebrow">Neymar Injury Radar</p>
+          <label class="language-control" for="languageSelect">
+            <span id="languageLabel">Language</span>
+            <select id="languageSelect" name="language"></select>
+          </label>
+        </header>
+        <h1 id="resultText">...</h1>
+        <div class="meta">
+          <span id="sourceCount">Loading sources</span>
+          <span id="checkedAt">Checking now</span>
+          <span id="matchCount">Scanning injury terms</span>
+        </div>
+        <section class="news-section" aria-labelledby="newsTitle">
+          <h2 id="newsTitle">Latest news</h2>
+          <ul id="newsList" class="news-list"></ul>
+        </section>
+        <button id="refreshButton" type="button">Refresh</button>
+      </section>
+    </main>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>
