@@ -7,13 +7,13 @@ const LANGUAGES = [
       language: "Language",
       loadingSources: "Loading sources",
       checkingNow: "Checking now",
-      scanning: "Scanning injury terms",
+      scanning: "Analyzing news with Groq",
       latestNews: "Latest news",
       checking: "Checking...",
       refresh: "Refresh",
       sources: (count) => `${count} recent source${count === 1 ? "" : "s"}`,
       checked: (time) => `Checked ${time}`,
-      matches: (count) => `${count} injury-related match${count === 1 ? "" : "es"}`,
+      matches: (count) => `${count} supporting source${count === 1 ? "" : "s"}`,
       noResult: "No current result",
       failed: "Request failed",
       noScan: "No scan result",
@@ -278,12 +278,12 @@ const LANGUAGES = [
 
 const languageByCode = new Map(LANGUAGES.map((language) => [language.code, language]));
 const resultText = document.querySelector("#resultText");
+const injurySummary = document.querySelector("#injurySummary");
 const sourceCount = document.querySelector("#sourceCount");
 const checkedAt = document.querySelector("#checkedAt");
 const matchCount = document.querySelector("#matchCount");
 const newsTitle = document.querySelector("#newsTitle");
 const newsList = document.querySelector("#newsList");
-const refreshButton = document.querySelector("#refreshButton");
 const languageLabel = document.querySelector("#languageLabel");
 const languageSelect = document.querySelector("#languageSelect");
 const panel = document.querySelector(".status-panel");
@@ -300,10 +300,6 @@ languageSelect.addEventListener("change", () => {
   currentLanguage = languageByCode.get(languageSelect.value) || languageByCode.get("en");
   localStorage.setItem("language", currentLanguage.code);
   applyLanguage();
-});
-
-refreshButton.addEventListener("click", () => {
-  refreshStatus();
 });
 
 refreshStatus();
@@ -330,6 +326,8 @@ async function refreshStatus() {
     hasError = true;
     panel.classList.add("error");
     resultText.textContent = error instanceof Error ? error.message : t().loadError;
+    injurySummary.hidden = true;
+    injurySummary.textContent = "";
     sourceCount.textContent = t().noResult;
     checkedAt.textContent = t().failed;
     matchCount.textContent = t().noScan;
@@ -348,6 +346,8 @@ function renderPayload() {
   renderNews(currentPayload.sources || []);
   resultText.textContent = currentPayload.injured ? currentLanguage.result.yes : currentLanguage.result.no;
   document.body.classList.add(currentPayload.injured ? "result-yes" : "result-no");
+  injurySummary.hidden = !currentPayload.validatedInjury;
+  injurySummary.textContent = currentPayload.validatedInjury;
   sourceCount.textContent = t().sources(currentPayload.newsCount);
   checkedAt.textContent = t().checked(formatTime(currentPayload.checkedAt));
   matchCount.textContent = t().matches(currentPayload.matchedSources.length);
@@ -378,8 +378,6 @@ function applyLanguage() {
   languageSelect.value = currentLanguage.code;
   languageLabel.textContent = t().language;
   newsTitle.textContent = t().latestNews;
-  refreshButton.disabled = loading;
-  refreshButton.textContent = loading ? t().checking : t().refresh;
 
   if (currentPayload) {
     renderPayload();

@@ -1,13 +1,18 @@
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
+import { existsSync, readFileSync } from "node:fs";
 import { extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const publicDir = resolve(__dirname, "public");
 
+loadDotEnv();
+
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || (process.env.NODE_ENV === "production" ? "0.0.0.0" : "127.0.0.1");
+const GROQ_MODEL = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
+const CACHE_TTL_MS = 60 * 60 * 1000;
 const NEWS_RSS_URLS = [
   "https://news.google.com/rss/search?q=Neymar%20when%3A1d&hl=en-US&gl=US&ceid=US%3Aen",
   "https://news.google.com/rss/search?q=Neymar%20when%3A1d&hl=pt-BR&gl=BR&ceid=BR%3Apt-419"
@@ -20,6 +25,8 @@ const mimeTypes = {
   ".json": "application/json; charset=utf-8",
   ".png": "image/png"
 };
+
+let statusCache = null;
 
 const server = createServer(async (request, response) => {
   try {
@@ -46,18 +53,34 @@ server.listen(PORT, HOST, () => {
 });
 
 async function buildNeymarStatus() {
-  const news = await fetchRecentNeymarNews();
-  const matchedSources = findInjuryRelatedNews(news);
-  const injured = matchedSources.length > 0;
+  const now = Date.now();
 
-  return {
+  if (statusCache && now - statusCache.createdAt < CACHE_TTL_MS) {
+    return statusCache.payload;
+  }
+
+  const news = await fetchRecentNeymarNews();
+  const groqVerdict = await askGroqForInjuryStatus(news);
+  const matchedSources = resolveMatchedSources(news, groqVerdict.sourceIndexes);
+
+  const payload = {
     checkedAt: new Date().toISOString(),
     newsCount: news.length,
-    injured,
-    result: injured ? "Yes" : "No",
+    injured: Boolean(groqVerdict.injured),
+    result: groqVerdict.injured ? "Yes" : "No",
+    validatedInjury: cleanText(groqVerdict.validatedInjury || ""),
+    explanation: cleanText(groqVerdict.explanation || ""),
+    confidence: cleanText(groqVerdict.confidence || "unknown"),
     matchedSources,
     sources: news
   };
+
+  statusCache = {
+    createdAt: now,
+    payload
+  };
+
+  return payload;
 }
 
 async function fetchRecentNeymarNews() {
@@ -96,11 +119,100 @@ async function fetchRecentNeymarNews() {
   return dedupeNews(items).slice(0, 30);
 }
 
-function findInjuryRelatedNews(news) {
-  const injuryPattern =
-    /\b(injury|injured|lesion|tear|sprain|strain|medical|muscle|thigh|knee|ankle|hamstring|lesao|lesão|lesionado|machucado|contusao|contusão|desfalque|departamento medico|departamento médico|sentiu dores|recuperacao|recuperação)\b/i;
+async function askGroqForInjuryStatus(news) {
+  if (!process.env.GROQ_API_KEY) {
+    throw new Error("Groq API key is not configured.");
+  }
 
-  return news.filter((item) => injuryPattern.test(`${item.title} ${item.snippet}`));
+  const newsBlock = news
+    .map(
+      (item, index) =>
+        `${index + 1}. Title: ${item.title}\nSource: ${item.source || "Unknown"}\nPublished: ${
+          item.publishedAt || "Unknown"
+        }\nSnippet: ${item.snippet || "No snippet"}\nLink: ${item.link}`
+    )
+    .join("\n\n");
+
+  const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model: GROQ_MODEL,
+      temperature: 0,
+      response_format: { type: "json_object" },
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are a careful sports news analyst. Decide whether the supplied recent news indicates Neymar is currently injured now. Use only the provided news titles, snippets, sources, dates, and links. Do not infer from old history, generic fitness doubts, emotional stories, or unrelated uses of words like out/miss unless the source clearly says he is currently injured, recovering from an injury, unavailable because of injury, or has a named current injury. Return only valid JSON."
+        },
+        {
+          role: "user",
+          content: `Analyze these Neymar news items from the last 24 hours.
+
+Return JSON with this exact shape:
+{
+  "injured": boolean,
+  "validatedInjury": "short current injury or availability status to highlight in red; empty string if not validated",
+  "confidence": "high" | "medium" | "low",
+  "explanation": "one concise sentence explaining the decision",
+  "sourceIndexes": [numbers of the strongest supporting news items]
+}
+
+If the evidence is unclear, contradictory, old, about generic fitness doubts, or only says he was selected/returned, set "injured": false and explain that no current injury is validated.
+
+News:
+${newsBlock}`
+        }
+      ]
+    })
+  });
+
+  const body = await response.json();
+
+  if (!response.ok) {
+    const message = body?.error?.message || `Groq request failed with ${response.status}`;
+    throw new Error(message);
+  }
+
+  return normalizeGroqVerdict(body?.choices?.[0]?.message?.content);
+}
+
+function normalizeGroqVerdict(content) {
+  const parsed = parseJsonObject(content);
+
+  return {
+    injured: Boolean(parsed.injured),
+    validatedInjury: typeof parsed.validatedInjury === "string" ? parsed.validatedInjury : "",
+    confidence: ["high", "medium", "low"].includes(parsed.confidence) ? parsed.confidence : "low",
+    explanation: typeof parsed.explanation === "string" ? parsed.explanation : "",
+    sourceIndexes: Array.isArray(parsed.sourceIndexes) ? parsed.sourceIndexes : []
+  };
+}
+
+function parseJsonObject(content = "") {
+  try {
+    return JSON.parse(content);
+  } catch {
+    const match = content.match(/\{[\s\S]*\}/);
+
+    if (!match) {
+      throw new Error("Groq response did not include valid JSON.");
+    }
+
+    return JSON.parse(match[0]);
+  }
+}
+
+function resolveMatchedSources(news, sourceIndexes) {
+  const uniqueIndexes = [...new Set(sourceIndexes)]
+    .map((index) => Number(index))
+    .filter((index) => Number.isInteger(index) && index >= 1 && index <= news.length);
+
+  return uniqueIndexes.map((index) => news[index - 1]);
 }
 
 function parseRssItems(xml) {
@@ -188,4 +300,35 @@ function sendJson(response, statusCode, payload) {
 function sendText(response, statusCode, text) {
   response.writeHead(statusCode, { "Content-Type": "text/plain; charset=utf-8" });
   response.end(text);
+}
+
+function loadDotEnv() {
+  const envPath = resolve(__dirname, ".env");
+
+  if (!existsSync(envPath)) {
+    return;
+  }
+
+  const lines = readFileSync(envPath, "utf8").split(/\r?\n/);
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+
+    if (!trimmed || trimmed.startsWith("#")) {
+      continue;
+    }
+
+    const index = trimmed.indexOf("=");
+
+    if (index === -1) {
+      continue;
+    }
+
+    const key = trimmed.slice(0, index).trim();
+    const value = trimmed.slice(index + 1).trim().replace(/^["']|["']$/g, "");
+
+    if (!process.env[key]) {
+      process.env[key] = value;
+    }
+  }
 }

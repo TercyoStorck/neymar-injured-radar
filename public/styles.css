@@ -199,23 +199,17 @@ body.result-no h1 {
   background: var(--no);
 }
 
-button {
-  display: block;
-  min-width: 132px;
-  min-height: 44px;
-  margin: 0 auto;
-  border: 0;
-  border-radius: 999px;
-  background: var(--accent);
-  color: #ffffff;
-  cursor: pointer;
-  font: inherit;
-  font-weight: 800;
-}
-
-button:disabled {
-  cursor: wait;
-  opacity: 0.7;
+.injury-summary {
+  margin: 14px 0 0;
+  padding: 12px 14px;
+  border: 1px solid rgba(215, 25, 32, 0.24);
+  border-radius: 8px;
+  background: rgba(215, 25, 32, 0.1);
+  color: var(--yes);
+  font-size: clamp(1.05rem, 3vw, 1.45rem);
+  font-weight: 850;
+  line-height: 1.25;
+  text-align: center;
 }
 
 .error h1 {
