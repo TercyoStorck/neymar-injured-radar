@@ -63,6 +63,20 @@ body.result-no {
   margin-bottom: 16px;
 }
 
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.brand img {
+  width: 46px;
+  height: 46px;
+  border-radius: 8px;
+  object-fit: cover;
+}
+
 .eyebrow {
   margin: 0;
   color: var(--accent);
@@ -226,6 +240,10 @@ button:disabled {
     align-items: stretch;
     flex-direction: column;
     gap: 12px;
+  }
+
+  .brand {
+    justify-content: center;
   }
 
   .language-control {
