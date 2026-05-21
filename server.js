@@ -262,14 +262,19 @@ ${newsBlock}`
     })
   });
 
-  const body = await response.json();
+  const bodyText = await response.text();
+  const body = parseGroqResponseBody(bodyText, response.status);
 
   if (!response.ok) {
     const message = body?.error?.message || `Groq request failed with ${response.status}`;
     throw new Error(message);
   }
 
-  return normalizeGroqVerdict(body?.choices?.[0]?.message?.content);
+  try {
+    return normalizeGroqVerdict(body?.choices?.[0]?.message?.content);
+  } catch {
+    throw new Error("Groq returned an invalid analysis response. Please try again shortly.");
+  }
 }
 
 function normalizeGroqVerdict(content) {
@@ -295,6 +300,23 @@ function parseJsonObject(content = "") {
     }
 
     return JSON.parse(match[0]);
+  }
+}
+
+function parseGroqResponseBody(text, statusCode) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    const preview = cleanText(text).slice(0, 220);
+    const message = preview
+      ? `Groq returned a non-JSON response (${statusCode}): ${preview}`
+      : `Groq returned an empty response (${statusCode}).`;
+
+    return {
+      error: {
+        message
+      }
+    };
   }
 }
 
