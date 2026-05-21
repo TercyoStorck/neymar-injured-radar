@@ -9,6 +9,7 @@ const LANGUAGES = [
       checkingNow: "Checking now",
       scanning: "Analyzing news with Groq",
       latestNews: "Latest news",
+      loading: "Loading analysis",
       checking: "Checking...",
       refresh: "Refresh",
       sources: (count) => `${count} recent source${count === 1 ? "" : "s"}`,
@@ -30,6 +31,7 @@ const LANGUAGES = [
       checkingNow: "正在检查",
       scanning: "正在扫描伤病词",
       latestNews: "最新新闻",
+      loading: "正在加载分析",
       checking: "正在检查...",
       refresh: "刷新",
       sources: (count) => `${count} 条近期来源`,
@@ -51,6 +53,7 @@ const LANGUAGES = [
       checkingNow: "अभी जांच हो रही है",
       scanning: "चोट से जुड़े शब्द खोजे जा रहे हैं",
       latestNews: "ताज़ा खबरें",
+      loading: "विश्लेषण लोड हो रहा है",
       checking: "जांच हो रही है...",
       refresh: "रीफ्रेश",
       sources: (count) => `${count} हालिया स्रोत`,
@@ -72,6 +75,7 @@ const LANGUAGES = [
       checkingNow: "Consultando ahora",
       scanning: "Buscando términos de lesión",
       latestNews: "Últimas noticias",
+      loading: "Cargando análisis",
       checking: "Consultando...",
       refresh: "Actualizar",
       sources: (count) => `${count} fuente${count === 1 ? "" : "s"} reciente${count === 1 ? "" : "s"}`,
@@ -93,6 +97,7 @@ const LANGUAGES = [
       checkingNow: "Vérification en cours",
       scanning: "Recherche de termes de blessure",
       latestNews: "Dernières nouvelles",
+      loading: "Chargement de l'analyse",
       checking: "Vérification...",
       refresh: "Actualiser",
       sources: (count) => `${count} source${count === 1 ? "" : "s"} récente${count === 1 ? "" : "s"}`,
@@ -115,6 +120,7 @@ const LANGUAGES = [
       checkingNow: "جار التحقق الآن",
       scanning: "جار البحث عن كلمات الإصابة",
       latestNews: "آخر الأخبار",
+      loading: "جار تحميل التحليل",
       checking: "جار التحقق...",
       refresh: "تحديث",
       sources: (count) => `${count} مصدر حديث`,
@@ -136,6 +142,7 @@ const LANGUAGES = [
       checkingNow: "এখন পরীক্ষা করা হচ্ছে",
       scanning: "চোট-সম্পর্কিত শব্দ খোঁজা হচ্ছে",
       latestNews: "সর্বশেষ খবর",
+      loading: "বিশ্লেষণ লোড হচ্ছে",
       checking: "পরীক্ষা করা হচ্ছে...",
       refresh: "রিফ্রেশ",
       sources: (count) => `${count}টি সাম্প্রতিক সূত্র`,
@@ -157,6 +164,7 @@ const LANGUAGES = [
       checkingNow: "Verificando agora",
       scanning: "Buscando termos de lesão",
       latestNews: "Últimas notícias",
+      loading: "Carregando análise",
       checking: "Verificando...",
       refresh: "Atualizar",
       sources: (count) => `${count} fonte${count === 1 ? "" : "s"} recente${count === 1 ? "" : "s"}`,
@@ -178,6 +186,7 @@ const LANGUAGES = [
       checkingNow: "Проверка сейчас",
       scanning: "Поиск слов о травме",
       latestNews: "Последние новости",
+      loading: "Загрузка анализа",
       checking: "Проверка...",
       refresh: "Обновить",
       sources: (count) => `${count} недавних источников`,
@@ -200,6 +209,7 @@ const LANGUAGES = [
       checkingNow: "ابھی جانچ ہو رہی ہے",
       scanning: "چوٹ سے متعلق الفاظ تلاش ہو رہے ہیں",
       latestNews: "تازہ خبریں",
+      loading: "تجزیہ لوڈ ہو رہا ہے",
       checking: "جانچ ہو رہی ہے...",
       refresh: "تازہ کریں",
       sources: (count) => `${count} حالیہ ذرائع`,
@@ -221,6 +231,7 @@ const LANGUAGES = [
       checkingNow: "Memeriksa sekarang",
       scanning: "Memindai istilah cedera",
       latestNews: "Berita terbaru",
+      loading: "Memuat analisis",
       checking: "Memeriksa...",
       refresh: "Segarkan",
       sources: (count) => `${count} sumber terbaru`,
@@ -242,6 +253,7 @@ const LANGUAGES = [
       checkingNow: "Wird geprüft",
       scanning: "Verletzungsbegriffe werden gesucht",
       latestNews: "Aktuelle Nachrichten",
+      loading: "Analyse wird geladen",
       checking: "Prüfen...",
       refresh: "Aktualisieren",
       sources: (count) => `${count} aktuelle Quelle${count === 1 ? "" : "n"}`,
@@ -263,6 +275,7 @@ const LANGUAGES = [
       checkingNow: "確認中",
       scanning: "負傷関連語を確認中",
       latestNews: "最新ニュース",
+      loading: "分析を読み込み中",
       checking: "確認中...",
       refresh: "更新",
       sources: (count) => `${count}件の最新情報源`,
@@ -276,7 +289,24 @@ const LANGUAGES = [
   }
 ];
 
+const BRAND_NAMES = {
+  en: "Neymar Injury Radar",
+  zh: "内马尔伤病雷达",
+  hi: "नेमार चोट रडार",
+  es: "Radar de Lesiones de Neymar",
+  fr: "Radar des Blessures de Neymar",
+  ar: "رادار إصابة نيمار",
+  bn: "নেইমার চোট রাডার",
+  pt: "Radar de Lesões do Neymar",
+  ru: "Радар травм Неймара",
+  ur: "نیمار چوٹ ریڈار",
+  id: "Radar Cedera Neymar",
+  de: "Neymar-Verletzungsradar",
+  ja: "ネイマール負傷レーダー"
+};
+
 const languageByCode = new Map(LANGUAGES.map((language) => [language.code, language]));
+const brandName = document.querySelector("#brandName");
 const resultText = document.querySelector("#resultText");
 const injurySummary = document.querySelector("#injurySummary");
 const sourceCount = document.querySelector("#sourceCount");
@@ -286,6 +316,8 @@ const newsTitle = document.querySelector("#newsTitle");
 const newsList = document.querySelector("#newsList");
 const languageLabel = document.querySelector("#languageLabel");
 const languageSelect = document.querySelector("#languageSelect");
+const loadingOverlay = document.querySelector("#loadingOverlay");
+const loadingText = document.querySelector("#loadingText");
 const panel = document.querySelector(".status-panel");
 
 let currentLanguage = getInitialLanguage();
@@ -299,7 +331,7 @@ applyLanguage();
 languageSelect.addEventListener("change", () => {
   currentLanguage = languageByCode.get(languageSelect.value) || languageByCode.get("en");
   localStorage.setItem("language", currentLanguage.code);
-  applyLanguage();
+  refreshStatus();
 });
 
 refreshStatus();
@@ -307,12 +339,17 @@ refreshStatus();
 async function refreshStatus() {
   loading = true;
   hasError = false;
+  currentPayload = null;
   applyLanguage();
   panel.classList.remove("error");
   document.body.classList.remove("result-yes", "result-no");
 
   try {
-    const response = await fetch("/api/neymar-status");
+    const response = await fetch("/api/neymar-status", {
+      headers: {
+        "X-User-Language": currentLanguage.code
+      }
+    });
     const payload = await response.json();
 
     if (!response.ok) {
@@ -359,6 +396,7 @@ function renderNews(sources) {
     const link = document.createElement("a");
     const meta = document.createElement("span");
 
+    item.classList.toggle("injury-related", Boolean(source.injuryRelated));
     link.href = source.link;
     link.target = "_blank";
     link.rel = "noreferrer";
@@ -375,9 +413,14 @@ function renderNews(sources) {
 function applyLanguage() {
   document.documentElement.lang = currentLanguage.code;
   document.documentElement.dir = currentLanguage.dir || "ltr";
+  brandName.textContent = BRAND_NAMES[currentLanguage.code] || BRAND_NAMES.en;
+  document.title = BRAND_NAMES[currentLanguage.code] || BRAND_NAMES.en;
   languageSelect.value = currentLanguage.code;
+  languageSelect.disabled = loading;
   languageLabel.textContent = t().language;
   newsTitle.textContent = t().latestNews;
+  loadingOverlay.hidden = !loading;
+  loadingText.textContent = t().loading;
 
   if (currentPayload) {
     renderPayload();

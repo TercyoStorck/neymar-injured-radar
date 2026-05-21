@@ -11,12 +11,38 @@ loadDotEnv();
 
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || (process.env.NODE_ENV === "production" ? "0.0.0.0" : "127.0.0.1");
-const GROQ_MODEL = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
+const GROQ_MODEL = process.env.GROQ_MODEL || "llama-3.1-8b-instant";
 const CACHE_TTL_MS = 60 * 60 * 1000;
-const NEWS_RSS_URLS = [
-  "https://news.google.com/rss/search?q=Neymar%20when%3A1d&hl=en-US&gl=US&ceid=US%3Aen",
-  "https://news.google.com/rss/search?q=Neymar%20when%3A1d&hl=pt-BR&gl=BR&ceid=BR%3Apt-419"
-];
+const SUPPORTED_LANGUAGES = {
+  en: "English",
+  zh: "Chinese",
+  hi: "Hindi",
+  es: "Spanish",
+  fr: "French",
+  ar: "Arabic",
+  bn: "Bengali",
+  pt: "Portuguese",
+  ru: "Russian",
+  ur: "Urdu",
+  id: "Indonesian",
+  de: "German",
+  ja: "Japanese"
+};
+const NEWS_LOCALES = {
+  en: { hl: "en-US", gl: "US", ceid: "US:en" },
+  zh: { hl: "zh-TW", gl: "TW", ceid: "TW:zh-Hant" },
+  hi: { hl: "hi-IN", gl: "IN", ceid: "IN:hi" },
+  es: { hl: "es-ES", gl: "ES", ceid: "ES:es" },
+  fr: { hl: "fr-FR", gl: "FR", ceid: "FR:fr" },
+  ar: { hl: "ar", gl: "SA", ceid: "SA:ar" },
+  bn: { hl: "bn-BD", gl: "BD", ceid: "BD:bn" },
+  pt: { hl: "pt-BR", gl: "BR", ceid: "BR:pt-419" },
+  ru: { hl: "ru-RU", gl: "RU", ceid: "RU:ru" },
+  ur: { hl: "ur-PK", gl: "PK", ceid: "PK:ur" },
+  id: { hl: "id-ID", gl: "ID", ceid: "ID:id" },
+  de: { hl: "de-DE", gl: "DE", ceid: "DE:de" },
+  ja: { hl: "ja-JP", gl: "JP", ceid: "JP:ja" }
+};
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -26,14 +52,15 @@ const mimeTypes = {
   ".png": "image/png"
 };
 
-let statusCache = null;
+const statusCache = new Map();
 
 const server = createServer(async (request, response) => {
   try {
     const url = new URL(request.url || "/", `http://${request.headers.host}`);
 
     if (url.pathname === "/api/neymar-status") {
-      const payload = await buildNeymarStatus();
+      const language = normalizeLanguage(request.headers["x-user-language"] || request.headers["accept-language"]);
+      const payload = await buildNeymarStatus(language);
       sendJson(response, 200, payload);
       return;
     }
@@ -52,56 +79,52 @@ server.listen(PORT, HOST, () => {
   console.log(`Neymar Injury Radar running at http://${HOST}:${PORT}`);
 });
 
-async function buildNeymarStatus() {
+async function buildNeymarStatus(language) {
   const now = Date.now();
+  const cached = statusCache.get(language);
 
-  if (statusCache && now - statusCache.createdAt < CACHE_TTL_MS) {
-    return statusCache.payload;
+  if (cached && now - cached.createdAt < CACHE_TTL_MS) {
+    return cached.payload;
   }
 
-  const news = await fetchRecentNeymarNews();
-  const groqVerdict = await askGroqForInjuryStatus(news);
-  const matchedSources = resolveMatchedSources(news, groqVerdict.sourceIndexes);
+  const news = await fetchRecentNeymarNews(language);
+  const groqVerdict = await askGroqForInjuryStatus(news, language);
+  const sources = decorateNews(news, groqVerdict);
+  const matchedSources = sources.filter((source) => source.injuryRelated);
 
   const payload = {
     checkedAt: new Date().toISOString(),
-    newsCount: news.length,
+    language,
+    newsCount: sources.length,
     injured: Boolean(groqVerdict.injured),
     result: groqVerdict.injured ? "Yes" : "No",
     validatedInjury: cleanText(groqVerdict.validatedInjury || ""),
     explanation: cleanText(groqVerdict.explanation || ""),
     confidence: cleanText(groqVerdict.confidence || "unknown"),
     matchedSources,
-    sources: news
+    sources
   };
 
-  statusCache = {
+  statusCache.set(language, {
     createdAt: now,
     payload
-  };
+  });
 
   return payload;
 }
 
-async function fetchRecentNeymarNews() {
-  const results = await Promise.allSettled(
-    NEWS_RSS_URLS.map(async (url) => {
-      const response = await fetch(url, {
-        headers: {
-          "User-Agent": "Mozilla/5.0 NeymarInjuryRadar/1.0"
-        }
-      });
+async function fetchRecentNeymarNews(language) {
+  const response = await fetch(buildNewsRssUrl(language), {
+    headers: {
+      "User-Agent": "Mozilla/5.0 NeymarInjuryRadar/1.0"
+    }
+  });
 
-      if (!response.ok) {
-        throw new Error(`News request failed with ${response.status}`);
-      }
+  if (!response.ok) {
+    throw new Error(`News request failed with ${response.status}`);
+  }
 
-      return parseRssItems(await response.text());
-    })
-  );
-
-  const items = results
-    .flatMap((result) => (result.status === "fulfilled" ? result.value : []))
+  const items = parseRssItems(await response.text())
     .map((item) => ({
       title: cleanText(item.title),
       source: cleanText(item.source || ""),
@@ -112,24 +135,36 @@ async function fetchRecentNeymarNews() {
     .filter((item) => item.title && item.link);
 
   if (items.length === 0) {
-    const error = results.find((result) => result.status === "rejected")?.reason;
-    throw new Error(error instanceof Error ? error.message : "No news items found.");
+    throw new Error("No news items found.");
   }
 
   return dedupeNews(items).slice(0, 30);
 }
 
-async function askGroqForInjuryStatus(news) {
+function buildNewsRssUrl(language) {
+  const locale = NEWS_LOCALES[language] || NEWS_LOCALES.en;
+  const url = new URL("https://news.google.com/rss/search");
+
+  url.searchParams.set("q", "Neymar when:1d");
+  url.searchParams.set("hl", locale.hl);
+  url.searchParams.set("gl", locale.gl);
+  url.searchParams.set("ceid", locale.ceid);
+
+  return url.toString();
+}
+
+async function askGroqForInjuryStatus(news, language) {
   if (!process.env.GROQ_API_KEY) {
     throw new Error("Groq API key is not configured.");
   }
 
+  const languageName = SUPPORTED_LANGUAGES[language] || SUPPORTED_LANGUAGES.en;
   const newsBlock = news
     .map(
       (item, index) =>
         `${index + 1}. Title: ${item.title}\nSource: ${item.source || "Unknown"}\nPublished: ${
           item.publishedAt || "Unknown"
-        }\nSnippet: ${item.snippet || "No snippet"}\nLink: ${item.link}`
+        }\nSnippet: ${item.snippet || "No snippet"}`
     )
     .join("\n\n");
 
@@ -142,27 +177,31 @@ async function askGroqForInjuryStatus(news) {
     body: JSON.stringify({
       model: GROQ_MODEL,
       temperature: 0,
+      max_tokens: 3500,
       response_format: { type: "json_object" },
       messages: [
         {
           role: "system",
           content:
-            "You are a careful sports news analyst. Decide whether the supplied recent news indicates Neymar is currently injured now. Use only the provided news titles, snippets, sources, dates, and links. Do not infer from old history, generic fitness doubts, emotional stories, or unrelated uses of words like out/miss unless the source clearly says he is currently injured, recovering from an injury, unavailable because of injury, or has a named current injury. Return only valid JSON."
+            "You are a careful sports news analyst and translator. Decide whether the supplied recent news indicates Neymar is currently injured now. Use only the provided news titles, snippets, sources, dates, and links. Do not infer from old history, generic fitness doubts, emotional stories, or unrelated uses of words like out/miss unless the source clearly says he is currently injured, recovering from an injury, unavailable because of injury, or has a named current injury. Translate user-facing text into the requested language. Return only valid JSON."
         },
         {
           role: "user",
           content: `Analyze these Neymar news items from the last 24 hours.
 
+Target language for all user-facing text: ${languageName}.
+
 Return JSON with this exact shape:
 {
   "injured": boolean,
-  "validatedInjury": "short current injury or availability status to highlight in red; empty string if not validated",
+  "validatedInjury": "short current injury or availability status in ${languageName} to highlight in red; empty string if not validated",
   "confidence": "high" | "medium" | "low",
-  "explanation": "one concise sentence explaining the decision",
+  "explanation": "one concise sentence in ${languageName} explaining the decision",
   "sourceIndexes": [numbers of the strongest supporting news items]
 }
 
 If the evidence is unclear, contradictory, old, about generic fitness doubts, or only says he was selected/returned, set "injured": false and explain that no current injury is validated.
+Only include an item in sourceIndexes when it directly supports the current injury decision.
 
 News:
 ${newsBlock}`
@@ -207,12 +246,30 @@ function parseJsonObject(content = "") {
   }
 }
 
-function resolveMatchedSources(news, sourceIndexes) {
+function decorateNews(news, verdict) {
+  const injuryIndexes = new Set(normalizeSourceIndexes(verdict.sourceIndexes, news.length));
+
+  return news.map((item, index) => {
+    const sourceIndex = index + 1;
+
+    return {
+      ...item,
+      injuryRelated: injuryIndexes.has(sourceIndex)
+    };
+  });
+}
+
+function normalizeSourceIndexes(sourceIndexes, maxIndex) {
   const uniqueIndexes = [...new Set(sourceIndexes)]
     .map((index) => Number(index))
-    .filter((index) => Number.isInteger(index) && index >= 1 && index <= news.length);
+    .filter((index) => Number.isInteger(index) && index >= 1 && index <= maxIndex);
 
-  return uniqueIndexes.map((index) => news[index - 1]);
+  return uniqueIndexes;
+}
+
+function normalizeLanguage(language) {
+  const baseCode = String(language || "en").toLowerCase().split("-")[0];
+  return SUPPORTED_LANGUAGES[baseCode] ? baseCode : "en";
 }
 
 function parseRssItems(xml) {

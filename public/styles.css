@@ -44,6 +44,7 @@ body.result-no {
 }
 
 .status-panel {
+  position: relative;
   width: min(900px, 100%);
   max-height: calc(100vh - 48px);
   overflow: auto;
@@ -106,8 +107,54 @@ select {
   font: inherit;
 }
 
+select:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
 [dir="rtl"] select {
   padding: 0 12px 0 34px;
+}
+
+.loading-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 16px;
+  border-radius: 8px;
+  background: rgba(245, 247, 251, 0.86);
+  color: var(--accent);
+  text-align: center;
+  backdrop-filter: blur(7px);
+}
+
+.loading-overlay[hidden] {
+  display: none;
+}
+
+.loader {
+  width: 48px;
+  height: 48px;
+  border: 5px solid rgba(18, 35, 63, 0.16);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 850ms linear infinite;
+}
+
+.loading-overlay p {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 850;
+  line-height: 1.25;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .meta {
@@ -156,6 +203,12 @@ h2 {
   border: 1px solid rgba(15, 23, 42, 0.1);
   border-radius: 8px;
   background: #ffffff;
+}
+
+.news-list li.injury-related {
+  border-color: rgba(215, 25, 32, 0.42);
+  background: rgba(215, 25, 32, 0.08);
+  box-shadow: inset 4px 0 0 var(--yes);
 }
 
 .news-list a {
