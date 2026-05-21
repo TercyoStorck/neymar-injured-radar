@@ -13,6 +13,58 @@ const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || (process.env.NODE_ENV === "production" ? "0.0.0.0" : "127.0.0.1");
 const GROQ_MODEL = process.env.GROQ_MODEL || "llama-3.1-8b-instant";
 const CACHE_TTL_MS = 60 * 60 * 1000;
+const GROQ_NEWS_ITEM_LIMIT = Number(process.env.GROQ_NEWS_ITEM_LIMIT || 14);
+const GROQ_MAX_OUTPUT_TOKENS = Number(process.env.GROQ_MAX_OUTPUT_TOKENS || 450);
+const GROQ_TITLE_CHAR_LIMIT = 140;
+const GROQ_SNIPPET_CHAR_LIMIT = 160;
+const GROQ_SOURCE_CHAR_LIMIT = 45;
+const INJURY_SIGNAL_TERMS = [
+  "injury",
+  "injured",
+  "calf",
+  "thigh",
+  "knee",
+  "ankle",
+  "foot",
+  "hamstring",
+  "muscle",
+  "rupture",
+  "sprain",
+  "sidelined",
+  "unavailable",
+  "recovering",
+  "rehab",
+  "lesao",
+  "lesionado",
+  "contusao",
+  "machucado",
+  "panturrilha",
+  "coxa",
+  "joelho",
+  "tornozelo",
+  "muscular",
+  "desfalque",
+  "recupera",
+  "lesion",
+  "lesionado",
+  "pantorrilla",
+  "muslo",
+  "rodilla",
+  "tobillo",
+  "blessure",
+  "blesse",
+  "mollet",
+  "cuisse",
+  "genou",
+  "cheville",
+  "forfait",
+  "verletzung",
+  "verletzt",
+  "wade",
+  "knie",
+  "knochel",
+  "muskel"
+];
 const SUPPORTED_LANGUAGES = {
   en: "English",
   zh: "Chinese",
@@ -159,12 +211,17 @@ async function askGroqForInjuryStatus(news, language) {
   }
 
   const languageName = SUPPORTED_LANGUAGES[language] || SUPPORTED_LANGUAGES.en;
-  const newsBlock = news
-    .map(
-      (item, index) =>
-        `${index + 1}. Title: ${item.title}\nSource: ${item.source || "Unknown"}\nPublished: ${
-          item.publishedAt || "Unknown"
-        }\nSnippet: ${item.snippet || "No snippet"}`
+  const newsBlock = prepareNewsForGroq(news)
+    .map((entry) =>
+      [
+        `#${entry.index}`,
+        truncateText(entry.item.source || "Unknown", GROQ_SOURCE_CHAR_LIMIT),
+        formatGroqDate(entry.item.publishedAt),
+        truncateText(entry.item.title, GROQ_TITLE_CHAR_LIMIT),
+        truncateText(entry.item.snippet, GROQ_SNIPPET_CHAR_LIMIT)
+      ]
+        .filter(Boolean)
+        .join(" | ")
     )
     .join("\n\n");
 
@@ -177,31 +234,26 @@ async function askGroqForInjuryStatus(news, language) {
     body: JSON.stringify({
       model: GROQ_MODEL,
       temperature: 0,
-      max_tokens: 3500,
+      max_tokens: GROQ_MAX_OUTPUT_TOKENS,
       response_format: { type: "json_object" },
       messages: [
         {
           role: "system",
           content:
-            "You are a careful sports news analyst and translator. Decide whether the supplied recent news indicates Neymar is currently injured now. Use only the provided news titles, snippets, sources, dates, and links. Do not infer from old history, generic fitness doubts, emotional stories, or unrelated uses of words like out/miss unless the source clearly says he is currently injured, recovering from an injury, unavailable because of injury, or has a named current injury. Translate user-facing text into the requested language. Return only valid JSON."
+            "Sports news analyst. Decide if recent items prove Neymar is currently injured. Use only direct current evidence. Ignore old history, vague fitness doubts, selection news, and unrelated uses of out/miss. Translate user text to the target language. Return JSON only. No HTML, XML, Markdown, or styling tags."
         },
         {
           role: "user",
-          content: `Analyze these Neymar news items from the last 24 hours.
-
-Target language for all user-facing text: ${languageName}.
-
-Return JSON with this exact shape:
+          content: `Lang: ${languageName}
+Return:
 {
   "injured": boolean,
-  "validatedInjury": "short current injury or availability status in ${languageName} to highlight in red; empty string if not validated",
+  "validatedInjury": "few words in ${languageName}, empty if not proven",
   "confidence": "high" | "medium" | "low",
-  "explanation": "one concise sentence in ${languageName} explaining the decision",
-  "sourceIndexes": [numbers of the strongest supporting news items]
+  "explanation": "one short sentence in ${languageName}",
+  "sourceIndexes": [original item numbers that directly support current injury]
 }
-
-If the evidence is unclear, contradictory, old, about generic fitness doubts, or only says he was selected/returned, set "injured": false and explain that no current injury is validated.
-Only include an item in sourceIndexes when it directly supports the current injury decision.
+Set injured=false when evidence is unclear, old, contradictory, or only about selection/return.
 
 News:
 ${newsBlock}`
@@ -261,10 +313,59 @@ function decorateNews(news, verdict) {
 
 function normalizeSourceIndexes(sourceIndexes, maxIndex) {
   const uniqueIndexes = [...new Set(sourceIndexes)]
-    .map((index) => Number(index))
+    .map((index) => Number(String(index).match(/\d+/)?.[0]))
     .filter((index) => Number.isInteger(index) && index >= 1 && index <= maxIndex);
 
   return uniqueIndexes;
+}
+
+function prepareNewsForGroq(news) {
+  return news
+    .map((item, index) => ({
+      item,
+      index: index + 1,
+      score: scoreInjuryRelevance(item, index)
+    }))
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .slice(0, GROQ_NEWS_ITEM_LIMIT)
+    .sort((a, b) => a.index - b.index);
+}
+
+function scoreInjuryRelevance(item, index) {
+  const text = normalizeSearchText(`${item.title} ${item.snippet}`);
+  const signalCount = INJURY_SIGNAL_TERMS.reduce(
+    (total, term) => total + (text.includes(normalizeSearchText(term)) ? 1 : 0),
+    0
+  );
+
+  return signalCount * 1000 + Math.max(0, 100 - index);
+}
+
+function normalizeSearchText(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+function truncateText(value, maxLength) {
+  const text = cleanText(value);
+
+  if (text.length <= maxLength) {
+    return text;
+  }
+
+  return `${text.slice(0, maxLength - 1).trim()}...`;
+}
+
+function formatGroqDate(value) {
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  return date.toISOString().slice(0, 16);
 }
 
 function normalizeLanguage(language) {
@@ -309,7 +410,7 @@ function stripHtml(value) {
 }
 
 function cleanText(value) {
-  return value.replace(/\s+/g, " ").trim();
+  return stripHtml(String(value || "")).replace(/\s+/g, " ").trim();
 }
 
 function decodeXml(value) {
