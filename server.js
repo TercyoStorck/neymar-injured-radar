@@ -140,19 +140,19 @@ async function buildNeymarStatus(language) {
   }
 
   const news = await fetchRecentNeymarNews(language);
-  const groqVerdict = await askGroqForInjuryStatus(news, language);
-  const sources = decorateNews(news, groqVerdict);
+  const verdict = await askGroqForInjuryStatus(news, language);
+  const sources = decorateNews(news, verdict);
   const matchedSources = sources.filter((source) => source.injuryRelated);
 
   const payload = {
     checkedAt: new Date().toISOString(),
     language,
     newsCount: sources.length,
-    injured: Boolean(groqVerdict.injured),
-    result: groqVerdict.injured ? "Yes" : "No",
-    validatedInjury: cleanText(groqVerdict.validatedInjury || ""),
-    explanation: cleanText(groqVerdict.explanation || ""),
-    confidence: cleanText(groqVerdict.confidence || "unknown"),
+    injured: verdict.injured,
+    result: verdict.injured ? "Yes" : "No",
+    validatedInjury: cleanText(verdict.validatedInjury || ""),
+    explanation: cleanText(verdict.explanation || ""),
+    confidence: cleanText(verdict.confidence || "unknown"),
     matchedSources,
     sources
   };
@@ -253,7 +253,7 @@ Return:
   "explanation": "one short sentence in ${languageName}",
   "sourceIndexes": [original item numbers that directly support current injury]
 }
-Set injured=false when evidence is unclear, old, contradictory, or only about selection/return.
+Set injured=false when evidence is unclear, old, contradictory, or only about selection/return. If injured=false, validatedInjury must be empty and sourceIndexes must be empty.
 
 News:
 ${newsBlock}`
@@ -279,13 +279,14 @@ ${newsBlock}`
 
 function normalizeGroqVerdict(content) {
   const parsed = parseJsonObject(content);
+  const injured = Boolean(parsed.injured);
 
   return {
-    injured: Boolean(parsed.injured),
-    validatedInjury: typeof parsed.validatedInjury === "string" ? parsed.validatedInjury : "",
+    injured,
+    validatedInjury: injured && typeof parsed.validatedInjury === "string" ? parsed.validatedInjury : "",
     confidence: ["high", "medium", "low"].includes(parsed.confidence) ? parsed.confidence : "low",
     explanation: typeof parsed.explanation === "string" ? parsed.explanation : "",
-    sourceIndexes: Array.isArray(parsed.sourceIndexes) ? parsed.sourceIndexes : []
+    sourceIndexes: injured && Array.isArray(parsed.sourceIndexes) ? parsed.sourceIndexes : []
   };
 }
 
