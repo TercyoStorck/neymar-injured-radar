@@ -14,7 +14,7 @@ Open `http://localhost:3000`.
 ## How It Works
 
 - The server reads English/US and Portuguese/Brazil Google News RSS results for `Neymar when:1d`.
-- It scans article titles and snippets for injury-related English and Portuguese terms.
+- It enriches recent RSS items with short article-body excerpts, then asks Groq to verify whether the evidence proves a current injury.
 - It shows `Yes` on a red background when injury-related terms are found, otherwise `No` on a green background.
 - The UI detects the browser/system language on first load and can be changed with the language selector.
 
@@ -22,3 +22,5 @@ Open `http://localhost:3000`.
 
 - `HOST`: optional, defaults to `127.0.0.1`.
 - `PORT`: optional, defaults to `3000`.
+- `ARTICLE_FETCH_LIMIT`: optional, defaults to `12` recent articles.
+- `ARTICLE_FETCH_TIMEOUT_MS`: optional, defaults to `4500`.

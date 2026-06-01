@@ -15,8 +15,11 @@ const GROQ_MODEL = process.env.GROQ_MODEL || "llama-3.1-8b-instant";
 const CACHE_TTL_MS = 60 * 60 * 1000;
 const GROQ_NEWS_ITEM_LIMIT = Number(process.env.GROQ_NEWS_ITEM_LIMIT || 14);
 const GROQ_MAX_OUTPUT_TOKENS = Number(process.env.GROQ_MAX_OUTPUT_TOKENS || 450);
+const ARTICLE_FETCH_LIMIT = Number(process.env.ARTICLE_FETCH_LIMIT || 12);
+const ARTICLE_FETCH_TIMEOUT_MS = Number(process.env.ARTICLE_FETCH_TIMEOUT_MS || 4500);
 const GROQ_TITLE_CHAR_LIMIT = 140;
-const GROQ_SNIPPET_CHAR_LIMIT = 160;
+const GROQ_SNIPPET_CHAR_LIMIT = 220;
+const GROQ_ARTICLE_TEXT_CHAR_LIMIT = 700;
 const GROQ_SOURCE_CHAR_LIMIT = 45;
 const INJURY_SIGNAL_TERMS = [
   "injury",
@@ -45,6 +48,7 @@ const INJURY_SIGNAL_TERMS = [
   "muscular",
   "desfalque",
   "recupera",
+  "vetado",
   "lesion",
   "lesionado",
   "pantorrilla",
@@ -143,14 +147,16 @@ async function buildNeymarStatus(language) {
   const verdict = await askGroqForInjuryStatus(news, language);
   const sources = decorateNews(news, verdict);
   const matchedSources = sources.filter((source) => source.injuryRelated);
+  const injured = verdict.injured || matchedSources.length > 0;
+  const validatedInjury = cleanText(verdict.validatedInjury || inferValidatedInjury(news) || "");
 
   const payload = {
     checkedAt: new Date().toISOString(),
     language,
     newsCount: sources.length,
-    injured: verdict.injured,
-    result: verdict.injured ? "Yes" : "No",
-    validatedInjury: cleanText(verdict.validatedInjury || ""),
+    injured,
+    result: injured ? "Yes" : "No",
+    validatedInjury: injured ? validatedInjury : "",
     explanation: cleanText(verdict.explanation || ""),
     confidence: cleanText(verdict.confidence || "unknown"),
     matchedSources,
@@ -190,7 +196,7 @@ async function fetchRecentNeymarNews(language) {
     throw new Error("No news items found.");
   }
 
-  return dedupeNews(items).slice(0, 30);
+  return enrichNewsWithArticleText(dedupeNews(items).slice(0, 30));
 }
 
 function buildNewsRssUrl(language) {
@@ -218,7 +224,8 @@ async function askGroqForInjuryStatus(news, language) {
         truncateText(entry.item.source || "Unknown", GROQ_SOURCE_CHAR_LIMIT),
         formatGroqDate(entry.item.publishedAt),
         truncateText(entry.item.title, GROQ_TITLE_CHAR_LIMIT),
-        truncateText(entry.item.snippet, GROQ_SNIPPET_CHAR_LIMIT)
+        truncateText(entry.item.snippet, GROQ_SNIPPET_CHAR_LIMIT),
+        truncateText(entry.item.articleText, GROQ_ARTICLE_TEXT_CHAR_LIMIT)
       ]
         .filter(Boolean)
         .join(" | ")
@@ -326,10 +333,11 @@ function decorateNews(news, verdict) {
 
   return news.map((item, index) => {
     const sourceIndex = index + 1;
+    const { articleText, ...publicItem } = item;
 
     return {
-      ...item,
-      injuryRelated: injuryIndexes.has(sourceIndex)
+      ...publicItem,
+      injuryRelated: injuryIndexes.has(sourceIndex) || hasCurrentInjurySignal(item)
     };
   });
 }
@@ -355,13 +363,298 @@ function prepareNewsForGroq(news) {
 }
 
 function scoreInjuryRelevance(item, index) {
-  const text = normalizeSearchText(`${item.title} ${item.snippet}`);
+  const text = normalizeSearchText(`${item.title} ${item.snippet} ${item.articleText}`);
   const signalCount = INJURY_SIGNAL_TERMS.reduce(
     (total, term) => total + (text.includes(normalizeSearchText(term)) ? 1 : 0),
     0
   );
 
   return signalCount * 1000 + Math.max(0, 100 - index);
+}
+
+function hasCurrentInjurySignal(item) {
+  const title = normalizeSearchText(item.title);
+  const text = normalizeSearchText(`${item.title} ${item.snippet} ${item.articleText}`);
+
+  if (isHistoricalInjuryContext(title)) {
+    return false;
+  }
+
+  const injuryPart = "(?:lesao|contusao|machucado|lesionado|contundido|vetado|sem condicoes? de jogo|nao tem condicao de jogo)";
+  const bodyPart = "(?:panturrilha|coxa|joelho|tornozelo|muscular|grau\\s*[123])";
+  const patterns = [
+    new RegExp(`\\bneymar\\b.{0,180}\\b${injuryPart}\\b`),
+    new RegExp(`\\bneymar\\b.{0,220}\\b(?:lesao|contusao)\\b.{0,90}\\b${bodyPart}\\b`),
+    new RegExp(`\\b(?:lesao|contusao)\\b.{0,90}\\b${bodyPart}\\b.{0,220}\\bneymar\\b`),
+    /\b(?:prazo de recuperacao|departamento medico|tratamento)\b.{0,220}\bneymar\b/
+  ];
+
+  return patterns.some((pattern) => pattern.test(text));
+}
+
+function isHistoricalInjuryContext(title) {
+  return /\b(?:relembre|historia|trajetoria|2014|2018|2022|2023|2024|2025)\b/.test(title);
+}
+
+function inferValidatedInjury(news) {
+  const text = normalizeSearchText(news.map((item) => `${item.title} ${item.snippet} ${item.articleText}`).join(" "));
+
+  if (/\blesao\b.{0,80}\bpanturrilha\b|\bpanturrilha\b.{0,80}\blesao\b|\bcontusao\b.{0,80}\bpanturrilha\b/.test(text)) {
+    return "lesão na panturrilha";
+  }
+
+  return "";
+}
+
+async function enrichNewsWithArticleText(items) {
+  const enriched = [...items];
+  const articleTextResults = await Promise.allSettled(
+    items.slice(0, ARTICLE_FETCH_LIMIT).map((item) => fetchArticleText(item.link))
+  );
+
+  for (const [index, result] of articleTextResults.entries()) {
+    if (result.status === "fulfilled" && result.value) {
+      enriched[index] = {
+        ...enriched[index],
+        link: result.value.link,
+        articleText: result.value.text
+      };
+    }
+  }
+
+  return enriched;
+}
+
+async function fetchArticleText(link) {
+  if (!link) {
+    return null;
+  }
+
+  const articleLink = await resolveGoogleNewsUrl(link);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), ARTICLE_FETCH_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(articleLink, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 NeymarInjuryRadar/1.0",
+        Accept: "text/html,application/xhtml+xml"
+      },
+      signal: controller.signal
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const contentType = response.headers.get("content-type") || "";
+
+    if (!contentType.includes("text/html") && !contentType.includes("application/xhtml+xml")) {
+      return null;
+    }
+
+    const text = extractArticleText(await response.text());
+
+    return text
+      ? {
+          link: articleLink,
+          text
+        }
+      : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function resolveGoogleNewsUrl(link) {
+  if (!isGoogleNewsArticleUrl(link)) {
+    return link;
+  }
+
+  try {
+    const base64String = getGoogleNewsBase64String(link);
+    const params = await fetchGoogleNewsDecodingParams(base64String);
+    return (await decodeGoogleNewsUrl(params)) || link;
+  } catch {
+    return link;
+  }
+}
+
+function isGoogleNewsArticleUrl(link) {
+  try {
+    const url = new URL(link);
+    return url.hostname === "news.google.com" && /\/(?:rss\/)?(?:articles|read)\//.test(url.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function getGoogleNewsBase64String(link) {
+  const url = new URL(link);
+  const parts = url.pathname.split("/").filter(Boolean);
+  return parts.at(-1) || "";
+}
+
+async function fetchGoogleNewsDecodingParams(base64String) {
+  const urls = [
+    `https://news.google.com/articles/${base64String}`,
+    `https://news.google.com/rss/articles/${base64String}`
+  ];
+
+  for (const url of urls) {
+    const response = await fetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 NeymarInjuryRadar/1.0"
+      }
+    });
+
+    if (!response.ok) {
+      continue;
+    }
+
+    const html = await response.text();
+    const signature = html.match(/\sdata-n-a-sg=["']([^"']+)["']/i)?.[1];
+    const timestamp = html.match(/\sdata-n-a-ts=["']([^"']+)["']/i)?.[1];
+
+    if (signature && timestamp) {
+      return {
+        base64String,
+        signature,
+        timestamp
+      };
+    }
+  }
+
+  throw new Error("Unable to resolve Google News article URL.");
+}
+
+async function decodeGoogleNewsUrl({ base64String, signature, timestamp }) {
+  const payload = [
+    "Fbv4je",
+    JSON.stringify([
+      "garturlreq",
+      [["X", "X", ["X", "X"], null, null, 1, 1, "US:en", null, 1, null, null, null, null, null, 0, 1], "X", "X", 1, [1, 1, 1], 1, 1, null, 0, 0, null, 0],
+      base64String,
+      Number(timestamp),
+      signature
+    ])
+  ];
+  const body = new URLSearchParams({
+    "f.req": JSON.stringify([[payload]])
+  });
+  const response = await fetch("https://news.google.com/_/DotsSplashUi/data/batchexecute", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+      "User-Agent": "Mozilla/5.0 NeymarInjuryRadar/1.0"
+    },
+    body
+  });
+
+  if (!response.ok) {
+    return "";
+  }
+
+  const text = await response.text();
+  const jsonLine = text
+    .split("\n")
+    .map((line) => line.trim())
+    .find((line) => line.startsWith("[["));
+
+  if (!jsonLine) {
+    return "";
+  }
+
+  const parsed = JSON.parse(jsonLine);
+  const decodedPayload = JSON.parse(parsed?.[0]?.[2] || "[]");
+  return typeof decodedPayload?.[1] === "string" ? decodedPayload[1] : "";
+}
+
+function extractArticleText(html) {
+  const jsonLdArticleBodies = readJsonLdArticleBodies(html);
+  const metaDescriptions = [
+    readMetaContent(html, "description"),
+    readMetaContent(html, "og:description"),
+    readMetaContent(html, "twitter:description")
+  ];
+  const visibleArticleText = readVisibleArticleText(html);
+
+  return cleanText([...jsonLdArticleBodies, ...metaDescriptions, visibleArticleText].filter(Boolean).join(" "));
+}
+
+function readJsonLdArticleBodies(html) {
+  const scripts = html.matchAll(
+    /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi
+  );
+  const articleBodies = [];
+
+  for (const [, rawJson] of scripts) {
+    const text = rawJson.replaceAll("<![CDATA[", "").replaceAll("]]>", "");
+
+    try {
+      collectJsonLdArticleBodies(JSON.parse(text), articleBodies);
+    } catch {
+      // Some publishers ship malformed JSON-LD; visible text extraction still covers those pages.
+    }
+  }
+
+  return articleBodies;
+}
+
+function collectJsonLdArticleBodies(value, articleBodies) {
+  if (!value || typeof value !== "object") {
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectJsonLdArticleBodies(item, articleBodies);
+    }
+
+    return;
+  }
+
+  if (typeof value.articleBody === "string") {
+    articleBodies.push(value.articleBody);
+  }
+
+  for (const key of ["@graph", "mainEntity", "mainEntityOfPage"]) {
+    collectJsonLdArticleBodies(value[key], articleBodies);
+  }
+}
+
+function readMetaContent(html, name) {
+  const escapedName = escapeRegExp(name);
+  const patterns = [
+    new RegExp(`<meta\\s+[^>]*(?:name|property)=["']${escapedName}["'][^>]*>`, "i"),
+    new RegExp(`<meta\\s+[^>]*content=["'][^"']*["'][^>]*(?:name|property)=["']${escapedName}["'][^>]*>`, "i")
+  ];
+  const tag = patterns.map((pattern) => html.match(pattern)?.[0]).find(Boolean);
+
+  if (!tag) {
+    return "";
+  }
+
+  const content = tag.match(/\scontent=["']([^"']*)["']/i)?.[1] || "";
+  return decodeXml(content);
+}
+
+function readVisibleArticleText(html) {
+  const scopedHtml =
+    html.match(/<article[\s\S]*?<\/article>/i)?.[0] ||
+    html.match(/<main[\s\S]*?<\/main>/i)?.[0] ||
+    html;
+  const paragraphText = [...scopedHtml.matchAll(/<(?:p|h1|h2)[^>]*>([\s\S]*?)<\/(?:p|h1|h2)>/gi)]
+    .map(([, text]) => stripHtml(text))
+    .join(" ");
+
+  return decodeXml(paragraphText);
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function normalizeSearchText(value) {
