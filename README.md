@@ -15,7 +15,7 @@ Open `http://localhost:3000`.
 
 - The server reads English/US and Portuguese/Brazil Google News RSS results for `Neymar when:1d`.
 - It enriches recent RSS items with short article-body excerpts, then asks Groq to verify whether the evidence proves a current injury.
-- It shows `Yes` on a red background when injury-related terms are found, otherwise `No` on a green background.
+- It shows `Yes` only when current injury evidence is confirmed; historical mentions and recent appearances should keep the result at `No`.
 - The UI detects the browser/system language on first load and can be changed with the language selector.
 
 ## Environment

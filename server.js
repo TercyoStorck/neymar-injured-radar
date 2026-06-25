@@ -147,8 +147,8 @@ async function buildNeymarStatus(language) {
   const verdict = await askGroqForInjuryStatus(news, language);
   const sources = decorateNews(news, verdict);
   const matchedSources = sources.filter((source) => source.injuryRelated);
-  const injured = verdict.injured || matchedSources.length > 0;
-  const validatedInjury = cleanText(verdict.validatedInjury || inferValidatedInjury(news) || "");
+  const injured = verdict.injured;
+  const validatedInjury = cleanText(verdict.validatedInjury || (injured ? inferValidatedInjury(news) : "") || "");
 
   const payload = {
     checkedAt: new Date().toISOString(),
@@ -247,7 +247,7 @@ async function askGroqForInjuryStatus(news, language) {
         {
           role: "system",
           content:
-            "Sports news analyst. Decide if recent items prove Neymar is currently injured. Use only direct current evidence. Ignore old history, vague fitness doubts, selection news, and unrelated uses of out/miss. Translate user text to the target language. Return JSON only. No HTML, XML, Markdown, or styling tags."
+            "Sports news analyst. Decide if recent items prove Neymar is currently injured right now. Use only direct, current evidence. If recent evidence says he played, started, came off the bench, returned to action, trained normally, or was available for a match, treat that as evidence against a current injury unless another item clearly says he got injured after that appearance. Ignore old history, vague fitness doubts, selection news, contract news, and unrelated uses of out/miss. Translate user text to the target language. Return JSON only. No HTML, XML, Markdown, or styling tags."
         },
         {
           role: "user",
@@ -330,6 +330,7 @@ function parseGroqResponseBody(text, statusCode) {
 
 function decorateNews(news, verdict) {
   const injuryIndexes = new Set(normalizeSourceIndexes(verdict.sourceIndexes, news.length));
+  const shouldUseHeuristics = verdict.injured && injuryIndexes.size === 0;
 
   return news.map((item, index) => {
     const sourceIndex = index + 1;
@@ -337,7 +338,7 @@ function decorateNews(news, verdict) {
 
     return {
       ...publicItem,
-      injuryRelated: injuryIndexes.has(sourceIndex) || hasCurrentInjurySignal(item)
+      injuryRelated: injuryIndexes.has(sourceIndex) || (shouldUseHeuristics && hasCurrentInjurySignal(item))
     };
   });
 }
@@ -380,6 +381,10 @@ function hasCurrentInjurySignal(item) {
     return false;
   }
 
+  if (hasRecentAvailabilitySignal(text)) {
+    return false;
+  }
+
   const injuryPart = "(?:lesao|contusao|machucado|lesionado|contundido|vetado|sem condicoes? de jogo|nao tem condicao de jogo)";
   const bodyPart = "(?:panturrilha|coxa|joelho|tornozelo|muscular|grau\\s*[123])";
   const patterns = [
@@ -394,6 +399,21 @@ function hasCurrentInjurySignal(item) {
 
 function isHistoricalInjuryContext(title) {
   return /\b(?:relembre|historia|trajetoria|2014|2018|2022|2023|2024|2025)\b/.test(title);
+}
+
+function hasRecentAvailabilitySignal(text) {
+  const appearancePart =
+    "(?:jogou|atuou|foi titular|comecou jogando|entrou em campo|participou|disputou|estreou|retornou aos gramados|voltou a jogar|played|started|featured|came off the bench|returned to action|back in action|fit to play|fit again|available for|available to play)";
+  const readinessPart =
+    "(?:treinou normalmente|treinando normalmente|a disposicao|liberado pelo departamento medico|sem restricoes|fit enough to play|fully available)";
+  const patterns = [
+    new RegExp(`\\bneymar\\b.{0,180}\\b${appearancePart}\\b`),
+    new RegExp(`\\b${appearancePart}\\b.{0,180}\\bneymar\\b`),
+    new RegExp(`\\bneymar\\b.{0,180}\\b${readinessPart}\\b`),
+    new RegExp(`\\b${readinessPart}\\b.{0,180}\\bneymar\\b`)
+  ];
+
+  return patterns.some((pattern) => pattern.test(text));
 }
 
 function inferValidatedInjury(news) {
